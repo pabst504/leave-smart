@@ -97,15 +97,25 @@ input {
   border-bottom: 1px solid var(--panel-border) !important;
 }
 
-.leaflet-popup-content-wrapper,
-.leaflet-popup-tip {
+.leaflet-popup-content-wrapper {
   background: var(--card-bg);
   color: var(--foreground);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+}
+
+.leaflet-popup-tip-container {
+  display: none;
+}
+
+.leaflet-popup-close-button {
+  display: none;
 }
 
 .leaflet-popup-content {
-  margin: 10px 12px;
-  font-size: 0.95rem;
+  margin: 8px 10px;
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .leaflet-bottom,

@@ -3,6 +3,7 @@ import type {
   LocationPoint,
   PlanTripRequest,
   RoutePoint,
+  RouteSegment,
   TripOption,
   TripPlanResponse,
   WeatherSnapshot,
@@ -166,9 +167,9 @@ async function geocodePlace(query: string, tomtomKey: string): Promise<LocationP
   };
 }
 
-function pickSamplePoints(points: RoutePoint[], travelSeconds: number) {
+function buildSampleIndexes(points: RoutePoint[], travelSeconds: number) {
   if (points.length < 2) {
-    return points;
+    return points.map((_, index) => index);
   }
 
   const desiredStops = Math.min(
@@ -182,9 +183,45 @@ function pickSamplePoints(points: RoutePoint[], travelSeconds: number) {
 
     return Math.round((index / (desiredStops - 1)) * (points.length - 1));
   });
-  const unique = [...new Set(indexes)];
+  return [...new Set(indexes)];
+}
 
-  return unique.map((index) => points[index]);
+function buildSegment(
+  routePoints: RoutePoint[],
+  sampleIndexes: number[],
+  sampleIndexPosition: number,
+  totalTrafficDelayMinutes: number,
+  totalTypicalDelayMinutes: number,
+): RouteSegment {
+  const currentIndex = sampleIndexes[sampleIndexPosition];
+  const startIndex =
+    sampleIndexPosition === 0 ? 0 : sampleIndexes[sampleIndexPosition - 1];
+  const endIndex =
+    sampleIndexPosition === sampleIndexes.length - 1
+      ? routePoints.length - 1
+      : currentIndex;
+  const safeEndIndex = Math.max(startIndex + 1, endIndex);
+  const points = routePoints.slice(startIndex, safeEndIndex + 1);
+  const normalizedSpan = Math.max(
+    1 / sampleIndexes.length,
+    (safeEndIndex - startIndex) / Math.max(1, routePoints.length - 1),
+  );
+  const midpoint = points[Math.floor(points.length / 2)] ?? routePoints[currentIndex];
+
+  return {
+    startIndex,
+    endIndex: safeEndIndex,
+    points,
+    midpoint,
+    estimatedTrafficDelayMinutes: Math.max(
+      0,
+      Math.round(totalTrafficDelayMinutes * normalizedSpan),
+    ),
+    estimatedTypicalTrafficDelayMinutes: Math.max(
+      0,
+      Math.round(totalTypicalDelayMinutes * normalizedSpan),
+    ),
+  };
 }
 
 function weatherConditionLabel(weatherCode: number) {
@@ -257,9 +294,12 @@ async function buildWeatherSnapshots(
   routePoints: RoutePoint[],
   departureUtc: DateTime,
   travelSeconds: number,
+  totalTrafficDelayMinutes: number,
+  totalTypicalDelayMinutes: number,
   cache: WeatherCache,
 ): Promise<WeatherSnapshot[]> {
-  const samples = pickSamplePoints(routePoints, travelSeconds);
+  const sampleIndexes = buildSampleIndexes(routePoints, travelSeconds);
+  const samples = sampleIndexes.map((index) => routePoints[index]);
   const arrivalUtc = departureUtc.plus({ seconds: travelSeconds });
   const startDate = departureUtc.toISODate();
   const endDate = arrivalUtc.toISODate();
@@ -284,6 +324,13 @@ async function buildWeatherSnapshots(
         : index === samples.length - 1
           ? "Arrival"
           : `Leg ${index}`;
+    const segment = buildSegment(
+      routePoints,
+      sampleIndexes,
+      index,
+      totalTrafficDelayMinutes,
+      totalTypicalDelayMinutes,
+    );
 
     if (times.length === 0) {
       return {
@@ -295,6 +342,7 @@ async function buildWeatherSnapshots(
         precipitation: 0,
         windSpeed: 0,
         riskScore: 0,
+        segment,
       };
     }
 
@@ -318,6 +366,7 @@ async function buildWeatherSnapshots(
       precipitation,
       windSpeed,
       riskScore: Number(riskScore.toFixed(1)),
+      segment,
     };
   });
 }
@@ -363,13 +412,6 @@ async function routeTrip(
   }
 
   const departureUtc = departure.toUTC();
-  const weatherSnapshots = await buildWeatherSnapshots(
-    routePoints,
-    departureUtc,
-    summary.travelTimeInSeconds,
-    weatherCache,
-  );
-
   const trafficDelayMinutes = Math.max(
     0,
     Math.round((summary.trafficDelayInSeconds ?? 0) / 60),
@@ -381,6 +423,14 @@ async function routeTrip(
         (summary.noTrafficTravelTimeInSeconds ?? summary.travelTimeInSeconds)) /
         60,
     ),
+  );
+  const weatherSnapshots = await buildWeatherSnapshots(
+    routePoints,
+    departureUtc,
+    summary.travelTimeInSeconds,
+    trafficDelayMinutes,
+    typicalTrafficDelayMinutes,
+    weatherCache,
   );
   const weatherRisk = weatherSnapshots.reduce((highest, snapshot) => {
     return Math.max(highest, snapshot.riskScore);

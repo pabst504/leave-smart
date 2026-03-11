@@ -9,6 +9,15 @@ export type RoutePoint = {
   lon: number;
 };
 
+export type RouteSegment = {
+  startIndex: number;
+  endIndex: number;
+  points: RoutePoint[];
+  midpoint: RoutePoint;
+  estimatedTrafficDelayMinutes: number;
+  estimatedTypicalTrafficDelayMinutes: number;
+};
+
 export type PlanTripRequest = {
   origin: string;
   destination: string;
@@ -27,6 +36,7 @@ export type WeatherSnapshot = {
   precipitation: number;
   windSpeed: number;
   riskScore: number;
+  segment: RouteSegment;
 };
 
 export type TripOption = {

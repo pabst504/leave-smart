@@ -5,6 +5,11 @@ export const metadata: Metadata = {
   title: "Leave Smart",
   description:
     "Roadtrip planner that recommends the best departure window using traffic and weather data.",
+  icons: {
+    icon: "/location.png",
+    shortcut: "/location.png",
+    apple: "/location.png",
+  },
 };
 
 export const viewport = {

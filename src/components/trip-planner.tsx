@@ -1,9 +1,15 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
 import { DateTime } from "luxon";
-import type { PlanTripRequest, TripOption, TripPlanResponse } from "@/types/trip";
+import type {
+  PlanTripRequest,
+  TripOption,
+  TripPlanResponse,
+  WeatherSnapshot,
+} from "@/types/trip";
 
 const RouteMap = dynamic(
   () => import("@/components/route-map").then((module) => module.RouteMap),
@@ -28,6 +34,60 @@ const defaultForm: PlanTripRequest = {
   timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 };
 
+function getScoreTone(score: number) {
+  if (score <= 24) {
+    return {
+      label: "Good",
+      badgeClass: "bg-emerald-600 text-white",
+      accentClass: "text-emerald-600",
+    };
+  }
+
+  if (score <= 44) {
+    return {
+      label: "Caution",
+      badgeClass: "bg-amber-400 text-amber-950",
+      accentClass: "text-amber-600",
+    };
+  }
+
+  return {
+    label: "Poor",
+    badgeClass: "bg-rose-600 text-white",
+    accentClass: "text-rose-500",
+  };
+}
+
+function buildTripWarning(plan: TripPlanResponse) {
+  const allOptions = [plan.recommendation, ...plan.alternatives];
+
+  if (!allOptions.every((option) => option.score >= 45)) {
+    return null;
+  }
+
+  const worstSnapshot = allOptions
+    .flatMap((option) => option.weatherSnapshots)
+    .sort((a, b) => b.riskScore - a.riskScore)[0];
+  const worstTrafficDelay = Math.max(...allOptions.map((option) => option.trafficDelayMinutes));
+  const worstTypicalDelay = Math.max(
+    ...allOptions.map((option) => option.typicalTrafficDelayMinutes),
+  );
+
+  if (!worstSnapshot) {
+    return "Warning: every tested departure time scored poorly. Conditions look rough across the route, so consider waiting for a better window.";
+  }
+
+  const weatherReason = `${worstSnapshot.condition} is showing up near ${worstSnapshot.label.toLowerCase()}, with rain chances up to ${Math.round(
+    worstSnapshot.precipitationProbability,
+  )}% and winds around ${Math.round(worstSnapshot.windSpeed)} mph.`;
+  const trafficReason =
+    worstTrafficDelay >= 20 || worstTypicalDelay >= 20
+      ? ` Traffic is also elevated, with delays reaching about ${worstTrafficDelay} live minutes and ${worstTypicalDelay} minutes of typical congestion.`
+      : "";
+
+  return `Warning: the weather will not be good across any tested departure window. ${weatherReason}${trafficReason}`;
+}
+
 function metricLabel(label: string, value: string) {
   return (
     <div className="rounded-3xl border border-[var(--panel-border)] bg-[var(--card-bg)] p-4 shadow-[0_12px_30px_rgba(15,23,42,0.07)]">
@@ -40,10 +100,16 @@ function metricLabel(label: string, value: string) {
 function OptionCard({
   option,
   isRecommended,
+  selectedSnapshotKey,
+  onSelectSnapshot,
 }: {
   option: TripOption;
   isRecommended?: boolean;
+  selectedSnapshotKey: string | null;
+  onSelectSnapshot: (option: TripOption, snapshot: WeatherSnapshot) => void;
 }) {
+  const scoreTone = getScoreTone(option.score);
+
   return (
     <article
       className={`rounded-[28px] border p-5 shadow-[0_18px_45px_rgba(15,23,42,0.08)] ${
@@ -63,13 +129,14 @@ function OptionCard({
           <button
             type="button"
             aria-label="Explain trip score"
-            className="rounded-full bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--chip-foreground)]"
+            className={`rounded-full px-4 py-2 text-sm font-semibold ${scoreTone.badgeClass}`}
           >
-            Score {option.score}
+            {scoreTone.label} · {option.score}
           </button>
           <div className="pointer-events-none absolute right-0 top-[calc(100%+0.75rem)] z-[500] w-72 rounded-2xl border border-[var(--panel-border)] bg-[var(--card-bg)] p-4 text-left text-sm text-[var(--secondary-foreground)] opacity-0 shadow-[0_18px_45px_rgba(15,23,42,0.18)] transition duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
             Lower is better. The score combines live traffic delay, typical congestion,
-            and the worst weather risk found along the route.
+            and the worst weather risk found along the route. Green means a better
+            window, yellow means use caution, and red means conditions look poor.
           </div>
         </div>
       </div>
@@ -91,7 +158,16 @@ function OptionCard({
 
       <div className="mt-5 grid gap-3 sm:grid-cols-2">
         {option.weatherSnapshots.map((snapshot) => (
-          <div key={`${snapshot.label}-${snapshot.timeIso}`} className="rounded-2xl bg-[var(--weather-card-bg)] px-4 py-4 text-[var(--weather-card-foreground)]">
+          <button
+            key={`${snapshot.label}-${snapshot.timeIso}`}
+            type="button"
+            onClick={() => onSelectSnapshot(option, snapshot)}
+            className={`rounded-2xl bg-[var(--weather-card-bg)] px-4 py-4 text-left text-[var(--weather-card-foreground)] transition ${
+              selectedSnapshotKey === `${snapshot.label}-${snapshot.timeIso}`
+                ? "ring-2 ring-amber-400"
+                : "hover:opacity-90"
+            }`}
+          >
             <div className="flex items-center justify-between gap-4">
               <p className="text-sm font-semibold">{snapshot.label}</p>
               <p className="text-xs uppercase tracking-[0.2em] text-[var(--weather-card-muted)]">
@@ -102,7 +178,10 @@ function OptionCard({
             <p className="mt-1 text-sm text-[var(--weather-card-muted)]">
               Rain {snapshot.precipitationProbability}% · Wind {Math.round(snapshot.windSpeed)} mph
             </p>
-          </div>
+            <p className="mt-2 text-xs uppercase tracking-[0.16em] text-amber-300">
+              Click to highlight on map
+            </p>
+          </button>
         ))}
       </div>
     </article>
@@ -115,8 +194,13 @@ export function TripPlanner() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [selectedSnapshot, setSelectedSnapshot] = useState<WeatherSnapshot | null>(null);
+  const [activeOption, setActiveOption] = useState<TripOption | null>(null);
+  const [isAlternativesOpen, setIsAlternativesOpen] = useState(false);
+  const mapSectionRef = useRef<HTMLElement | null>(null);
 
   const alternatives = plan?.alternatives.slice(0, 3) ?? [];
+  const tripWarning = plan ? buildTripWarning(plan) : null;
 
   useEffect(() => {
     const storedTheme = window.localStorage.getItem("leave-smart-theme");
@@ -158,6 +242,9 @@ export function TripPlanner() {
       }
 
       setPlan(data);
+      setActiveOption(data.recommendation);
+      setSelectedSnapshot(null);
+      setIsAlternativesOpen(false);
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -202,9 +289,10 @@ export function TripPlanner() {
                 <input
                   required
                   value={form.origin}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, origin: event.target.value }))
-                  }
+                  onChange={(event) => {
+                    setForm((current) => ({ ...current, origin: event.target.value }));
+                    setSelectedSnapshot(null);
+                  }}
                   className="w-full rounded-2xl border border-[var(--panel-border)] bg-[var(--card-bg)] px-4 py-3 text-base text-[var(--foreground)] outline-none ring-0 transition placeholder:text-[var(--muted)] focus:border-teal-500"
                   placeholder="Raleigh, NC"
                 />
@@ -215,9 +303,10 @@ export function TripPlanner() {
                 <input
                   required
                   value={form.destination}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, destination: event.target.value }))
-                  }
+                  onChange={(event) => {
+                    setForm((current) => ({ ...current, destination: event.target.value }));
+                    setSelectedSnapshot(null);
+                  }}
                   className="w-full rounded-2xl border border-[var(--panel-border)] bg-[var(--card-bg)] px-4 py-3 text-base text-[var(--foreground)] outline-none ring-0 transition placeholder:text-[var(--muted)] focus:border-teal-500"
                   placeholder="Asheville, NC"
                 />
@@ -231,9 +320,10 @@ export function TripPlanner() {
                     type="date"
                     min={today}
                     value={form.date}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, date: event.target.value }))
-                    }
+                    onChange={(event) => {
+                      setForm((current) => ({ ...current, date: event.target.value }));
+                      setSelectedSnapshot(null);
+                    }}
                     className="w-full rounded-2xl border border-[var(--panel-border)] bg-[var(--card-bg)] px-4 py-3 text-base text-[var(--foreground)] outline-none transition focus:border-teal-500"
                   />
                 </label>
@@ -244,12 +334,13 @@ export function TripPlanner() {
                     required
                     type="time"
                     value={form.earliestDeparture}
-                    onChange={(event) =>
+                    onChange={(event) => {
                       setForm((current) => ({
                         ...current,
                         earliestDeparture: event.target.value,
-                      }))
-                    }
+                      }));
+                      setSelectedSnapshot(null);
+                    }}
                     className="w-full rounded-2xl border border-[var(--panel-border)] bg-[var(--card-bg)] px-4 py-3 text-base text-[var(--foreground)] outline-none transition focus:border-teal-500"
                   />
                 </label>
@@ -260,12 +351,13 @@ export function TripPlanner() {
                     required
                     type="time"
                     value={form.latestDeparture}
-                    onChange={(event) =>
+                    onChange={(event) => {
                       setForm((current) => ({
                         ...current,
                         latestDeparture: event.target.value,
-                      }))
-                    }
+                      }));
+                      setSelectedSnapshot(null);
+                    }}
                     className="w-full rounded-2xl border border-[var(--panel-border)] bg-[var(--card-bg)] px-4 py-3 text-base text-[var(--foreground)] outline-none transition focus:border-teal-500"
                   />
                 </label>
@@ -301,7 +393,20 @@ export function TripPlanner() {
           <div className="space-y-6">
             {plan ? (
               <>
-                <section className="overflow-hidden rounded-[32px] border border-[var(--panel-border)] bg-[var(--panel-bg)] p-4 shadow-[0_22px_60px_rgba(15,23,42,0.12)] backdrop-blur md:p-5">
+                {tripWarning ? (
+                  <section className="rounded-[28px] border border-rose-400/50 bg-rose-500/10 p-5 shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
+                    <p className="text-sm font-semibold uppercase tracking-[0.22em] text-rose-500">
+                      Route warning
+                    </p>
+                    <p className="mt-3 text-base leading-7 text-[var(--foreground)]">
+                      {tripWarning}
+                    </p>
+                  </section>
+                ) : null}
+                <section
+                  ref={mapSectionRef}
+                  className="overflow-hidden rounded-[32px] border border-[var(--panel-border)] bg-[var(--panel-bg)] p-4 shadow-[0_22px_60px_rgba(15,23,42,0.12)] backdrop-blur md:p-5"
+                >
                   <div className="mb-4 flex items-center justify-between gap-4">
                     <div>
                       <p className="text-sm font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">
@@ -312,29 +417,96 @@ export function TripPlanner() {
                       </h2>
                     </div>
                     <div className="rounded-full bg-[var(--card-bg)] px-4 py-2 text-sm text-[var(--secondary-foreground)]">
-                      {plan.recommendation.distanceMiles} mi
+                      {(activeOption ?? plan.recommendation).distanceMiles} mi
                     </div>
                   </div>
                   <RouteMap
-                    key={`${plan.origin.lat},${plan.origin.lon}:${plan.destination.lat},${plan.destination.lon}:${plan.recommendation.departureIso}`}
+                    key={`${plan.origin.lat},${plan.origin.lon}:${plan.destination.lat},${plan.destination.lon}:${(activeOption ?? plan.recommendation).departureIso}`}
                     plan={plan}
                     theme={theme}
+                    selectedSnapshot={selectedSnapshot}
+                    option={activeOption ?? plan.recommendation}
                   />
                 </section>
-                <OptionCard option={plan.recommendation} isRecommended />
+                <OptionCard
+                  option={plan.recommendation}
+                  isRecommended
+                  selectedSnapshotKey={
+                    selectedSnapshot ? `${selectedSnapshot.label}-${selectedSnapshot.timeIso}` : null
+                  }
+                  onSelectSnapshot={(option, snapshot) => {
+                    setActiveOption(option);
+                    setSelectedSnapshot(snapshot);
+                    mapSectionRef.current?.scrollIntoView({
+                      behavior: "smooth",
+                      block: "start",
+                    });
+                  }}
+                />
                 {alternatives.length > 0 ? (
-                  <section className="space-y-4">
-                    <div>
-                      <p className="text-sm font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">
-                        Backup windows
-                      </p>
-                      <h2 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
-                        Other departure times worth considering
-                      </h2>
+                  <section className="rounded-[28px] border border-[var(--panel-border)] bg-[var(--panel-bg)] p-5 shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
+                    <button
+                      type="button"
+                      onClick={() => setIsAlternativesOpen((current) => !current)}
+                      className="flex w-full items-start justify-between gap-4 text-left"
+                      aria-expanded={isAlternativesOpen}
+                    >
+                      <div>
+                        <p className="text-sm font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">
+                          Backup windows
+                        </p>
+                        <h2 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
+                          Other departure times worth considering
+                        </h2>
+                        <p className="mt-2 text-sm text-[var(--secondary-foreground)]">
+                          Expand to compare alternate departure windows.
+                        </p>
+                      </div>
+                      <span
+                        className={`mt-1 inline-flex h-10 w-10 items-center justify-center rounded-full bg-[var(--card-bg)] transition-transform duration-200 ${
+                          isAlternativesOpen ? "rotate-90" : "rotate-[-90deg]"
+                        }`}
+                      >
+                        <Image
+                          src="/right.png"
+                          alt=""
+                          width={16}
+                          height={16}
+                          className="opacity-80"
+                        />
+                      </span>
+                    </button>
+                    <div
+                      className={`grid transition-[grid-template-rows,opacity,margin] duration-300 ease-out ${
+                        isAlternativesOpen
+                          ? "mt-5 grid-rows-[1fr] opacity-100"
+                          : "mt-0 grid-rows-[0fr] opacity-0"
+                      }`}
+                    >
+                      <div className="overflow-hidden">
+                        <div className="space-y-4">
+                      {alternatives.map((option) => (
+                        <OptionCard
+                          key={option.departureIso}
+                          option={option}
+                          selectedSnapshotKey={
+                            selectedSnapshot
+                              ? `${selectedSnapshot.label}-${selectedSnapshot.timeIso}`
+                              : null
+                          }
+                          onSelectSnapshot={(selectedOption, snapshot) => {
+                            setActiveOption(selectedOption);
+                            setSelectedSnapshot(snapshot);
+                            mapSectionRef.current?.scrollIntoView({
+                              behavior: "smooth",
+                              block: "start",
+                            });
+                          }}
+                        />
+                      ))}
+                        </div>
+                      </div>
                     </div>
-                    {alternatives.map((option) => (
-                      <OptionCard key={option.departureIso} option={option} />
-                    ))}
                   </section>
                 ) : null}
               </>
