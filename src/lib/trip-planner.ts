@@ -166,12 +166,22 @@ async function geocodePlace(query: string, tomtomKey: string): Promise<LocationP
   };
 }
 
-function pickSamplePoints(points: RoutePoint[]) {
+function pickSamplePoints(points: RoutePoint[], travelSeconds: number) {
   if (points.length < 2) {
     return points;
   }
 
-  const indexes = [0, Math.floor(points.length / 3), Math.floor((2 * points.length) / 3), points.length - 1];
+  const desiredStops = Math.min(
+    12,
+    Math.max(4, Math.ceil(travelSeconds / (6 * 60 * 60)) + 1),
+  );
+  const indexes = Array.from({ length: desiredStops }, (_, index) => {
+    if (desiredStops === 1) {
+      return 0;
+    }
+
+    return Math.round((index / (desiredStops - 1)) * (points.length - 1));
+  });
   const unique = [...new Set(indexes)];
 
   return unique.map((index) => points[index]);
@@ -249,7 +259,7 @@ async function buildWeatherSnapshots(
   travelSeconds: number,
   cache: WeatherCache,
 ): Promise<WeatherSnapshot[]> {
-  const samples = pickSamplePoints(routePoints);
+  const samples = pickSamplePoints(routePoints, travelSeconds);
   const arrivalUtc = departureUtc.plus({ seconds: travelSeconds });
   const startDate = departureUtc.toISODate();
   const endDate = arrivalUtc.toISODate();
@@ -268,9 +278,16 @@ async function buildWeatherSnapshots(
     const hourly = forecasts[index].hourly;
     const times = hourly?.time ?? [];
 
+    const label =
+      index === 0
+        ? "Start"
+        : index === samples.length - 1
+          ? "Arrival"
+          : `Leg ${index}`;
+
     if (times.length === 0) {
       return {
-        label: index === 0 ? "Start" : index === samples.length - 1 ? "Arrival" : `Leg ${index + 1}`,
+        label,
         timeIso: sampleTime.toISO() ?? departureUtc.toISO() ?? "",
         weatherCode: 0,
         condition: "forecast unavailable",
@@ -293,7 +310,7 @@ async function buildWeatherSnapshots(
       Math.max(0, (windSpeed - 20) / 5);
 
     return {
-      label: index === 0 ? "Start" : index === samples.length - 1 ? "Arrival" : `Leg ${index + 1}`,
+      label,
       timeIso: sampleTime.toISO() ?? departureUtc.toISO() ?? "",
       weatherCode,
       condition: weatherConditionLabel(weatherCode),
@@ -368,8 +385,8 @@ async function routeTrip(
   const weatherRisk = weatherSnapshots.reduce((highest, snapshot) => {
     return Math.max(highest, snapshot.riskScore);
   }, 0);
-  const score = Number(
-    (trafficDelayMinutes * 1.15 + typicalTrafficDelayMinutes * 0.65 + weatherRisk * 7.5).toFixed(1),
+  const score = Math.ceil(
+    trafficDelayMinutes * 1.15 + typicalTrafficDelayMinutes * 0.65 + weatherRisk * 7.5,
   );
   const localDeparture = departureUtc.setZone(timeZone);
   const localArrival = departureUtc.plus({ seconds: summary.travelTimeInSeconds }).setZone(timeZone);
@@ -398,7 +415,7 @@ async function routeTrip(
     departureIso: localDeparture.toISO() ?? "",
     departureLabel: localDeparture.toFormat("ccc, LLL d • h:mm a"),
     arrivalIso: localArrival.toISO() ?? "",
-    arrivalLabel: localArrival.toFormat("h:mm a"),
+    arrivalLabel: localArrival.toFormat("ccc, LLL d • h:mm a"),
     score,
     trafficDelayMinutes,
     typicalTrafficDelayMinutes,
