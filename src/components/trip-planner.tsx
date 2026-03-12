@@ -88,6 +88,19 @@ function buildTripWarning(plan: TripPlanResponse) {
   return `Warning: the weather will not be good across any tested departure window. ${weatherReason}${trafficReason}`;
 }
 
+function scrollToMapOnMobile(element: HTMLElement | null) {
+  if (!element || typeof window === "undefined" || window.innerWidth >= 1024) {
+    return;
+  }
+
+  window.setTimeout(() => {
+    element.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }, 120);
+}
+
 function metricLabel(label: string, value: string) {
   return (
     <div className="rounded-3xl border border-[var(--panel-border)] bg-[var(--card-bg)] p-4 shadow-[0_12px_30px_rgba(15,23,42,0.07)]">
@@ -131,7 +144,7 @@ function OptionCard({
             aria-label="Explain trip score"
             className={`rounded-full px-4 py-2 text-sm font-semibold ${scoreTone.badgeClass}`}
           >
-            {scoreTone.label} · {option.score}
+            {scoreTone.label}
           </button>
           <div className="pointer-events-none absolute right-0 top-[calc(100%+0.75rem)] z-[500] w-72 rounded-2xl border border-[var(--panel-border)] bg-[var(--card-bg)] p-4 text-left text-sm text-[var(--secondary-foreground)] opacity-0 shadow-[0_18px_45px_rgba(15,23,42,0.18)] transition duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
             Lower is better. The score combines live traffic delay, typical congestion,
@@ -221,6 +234,14 @@ export function TripPlanner() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("leave-smart-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!plan) {
+      return;
+    }
+
+    scrollToMapOnMobile(mapSectionRef.current);
+  }, [plan]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -312,8 +333,8 @@ export function TripPlanner() {
                 />
               </label>
 
-              <div className="grid gap-4 sm:grid-cols-3">
-                <label className="block sm:col-span-1">
+              <div className="grid gap-4 md:grid-cols-3">
+                <label className="block min-w-0">
                   <span className="mb-2 block text-sm font-semibold text-[var(--secondary-foreground)]">Date</span>
                   <input
                     required
@@ -328,7 +349,7 @@ export function TripPlanner() {
                   />
                 </label>
 
-                <label className="block">
+                <label className="block min-w-0">
                   <span className="mb-2 block text-sm font-semibold text-[var(--secondary-foreground)]">Earliest</span>
                   <input
                     required
@@ -345,7 +366,7 @@ export function TripPlanner() {
                   />
                 </label>
 
-                <label className="block">
+                <label className="block min-w-0">
                   <span className="mb-2 block text-sm font-semibold text-[var(--secondary-foreground)]">Latest</span>
                   <input
                     required
@@ -464,7 +485,7 @@ export function TripPlanner() {
                       </div>
                       <span
                         className={`mt-1 inline-flex h-10 w-10 items-center justify-center rounded-full bg-[var(--card-bg)] transition-transform duration-200 ${
-                          isAlternativesOpen ? "rotate-90" : "rotate-[-90deg]"
+                          isAlternativesOpen ? "rotate-[-90deg]" : "rotate-90"
                         }`}
                       >
                         <Image
