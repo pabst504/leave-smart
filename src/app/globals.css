@@ -76,6 +76,18 @@ input {
   -webkit-tap-highlight-color: transparent;
 }
 
+input[type="date"],
+input[type="time"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  inline-size: 100%;
+  max-inline-size: 100%;
+  box-sizing: border-box;
+}
+
 .leaflet-container {
   font-family: "Avenir Next", "Segoe UI", sans-serif;
   background: #dbe4eb;
